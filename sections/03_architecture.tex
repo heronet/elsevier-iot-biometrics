@@ -1,0 +1,204 @@
+\section{The BASE Architecture}
+\label{sec:architecture}
+
+We designed BASE to directly address the integration barriers identified in Section~\ref{sec:sensor_limitations}. It eliminates type-safety violations, resolves broken state management by moving sequencing into the kernel, and repairs leaky abstractions by isolating all vendor-specific protocol details. By integrating these solutions as a dedicated RTOS subsystem, BASE enforces secure, deterministic behavior by default.
+
+\subsection{Three-Plane Architecture}
+
+BASE separates concerns across three layers (Figure~\ref{fig:architecture}). The Application Plane provides unified enrollment and matching interfaces via standard RTOS system calls. The Subsystem Contract Plane normalizes hardware capabilities, enforces type safety, and abstracts protocol-specific details. The Driver Implementation Plane isolates all vendor-specific UART/SPI protocols and sensor state. No layer reaches past its boundary.
+
+\begin{figure}
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[
+    auto,
+    node distance=0.6cm,
+    base/.style={rectangle, draw=black!60, thick, align=center, rounded corners=2pt, font=\small\sffamily},
+    layer/.style={base, text width=7.5cm, minimum height=1.4cm},
+    driver/.style={base, text width=2.0cm, minimum height=1.2cm, fill=orange!5},
+    hw/.style={base, text width=2.0cm, minimum height=0.8cm, draw=black!40, dashed, fill=gray!5, font=\scriptsize\sffamily},
+    arrow/.style={-Latex, thick, draw=black!70}
+]
+
+    \node [layer, fill=blue!5] (app) {
+        \textbf{Application Plane}\\
+        \texttt{biometric\_match()}\\
+        \textit{\scriptsize (Hardware Agnostic API)}
+    };
+
+    \node [layer, fill=green!5, below=of app] (subsys) {
+        \textbf{Subsystem Contract Plane}\\
+        Normalization \& Validation\\
+        \textit{\scriptsize (Type Safety Enforced)}
+    };
+
+    \node [driver, below=1cm of subsys, xshift=-2.6cm] (drv1) {\textbf{ZFM Driver}\\(Packet Mode)};
+    \node [driver, below=1cm of subsys, xshift=0cm]    (drv2) {\textbf{GT-5X Driver}\\(Command Mode)};
+    \node [driver, below=1cm of subsys, xshift=2.6cm]  (drv3) {\textbf{AI10 Driver}\\(Face/Palm)};
+
+    \node [hw, below=0.3cm of drv1] (hw1) {ZFM Sensor};
+    \node [hw, below=0.3cm of drv2] (hw2) {GT-521F32};
+    \node [hw, below=0.3cm of drv3] (hw3) {DFRobot AI10};
+
+    \draw [arrow] (app) -- (subsys);
+
+    \draw [arrow] (subsys.south) -- +(0,-0.5) -| (drv1.north);
+    \draw [arrow] (subsys.south) -- +(0,-0.5) -| (drv2.north);
+    \draw [arrow] (subsys.south) -- +(0,-0.5) -| (drv3.north);
+
+    \draw [arrow, dashed] (drv1) -- (hw1);
+    \draw [arrow, dashed] (drv2) -- (hw2);
+    \draw [arrow, dashed] (drv3) -- (hw3);
+
+\end{tikzpicture}%
+}
+\caption{Three-plane architecture of BASE. The contract plane dispatches to three driver families spanning contact fingerprint (ZFM-X0, GT-5X) and camera-based multi-modal sensing (AI10). No layer reaches past its boundary.}
+\label{fig:architecture}
+\end{figure}
+
+The Application Plane provides unified enrollment, matching, and template management interfaces. Applications never access hardware drivers directly. All public functions are defined via standard RTOS system calls (e.g., Zephyr's \texttt{\_\_syscall} annotation, which generates kernel-mode dispatch for each entry point), allowing the driver to run in privileged mode while the application runs in userspace. On POSIX-compliant systems such as NuttX, the same boundary is enforced via VFS \texttt{ioctl()} calls; on capability-based systems such as TockOS, via capsule syscalls. This protects the biometric state machine from application-level crashes or memory corruption. Errors are indicated by standard POSIX error codes (i.e., EBUSY, EINVAL).
+
+The Subsystem Contract Plane defines the \\ \texttt{biometric\_driver\_api} structure that biometric drivers are required to implement. This layer normalizes different hardware capabilities into standardized attribute enumerations. It also abstracts away protocol-specific endianness. Applications work without the knowledge of whether a sensor communicates in Big Endian (ZFM-70) or Little Endian (GT-521F32).
+
+The Driver Implementation Plane consists of hardware drivers that comply with the requirements of the Contract Plane. These drivers handle the low-level communication protocols (e.g., UART packet framing, checksum calculation) and manage the sensor's physical state. By isolating these details at the bottom of the stack, BASE ensures that protocol-level changes such as switching from a packet-based ZFM sensor to a command-based GT-5X sensor remain transparent to the higher layers. It is also possible to integrate Trusted Execution Environment (TEE), where matching logic can be further offloaded to secure zones like ARM TrustZone.
+
+\subsection{API Specification}
+
+\subsubsection{Core Data Types}
+
+We defined five core types based on biometric concerns: capabilities, match outcomes, enrollment progress, policy configuration, and on-device user metadata. This allowed us to replace the legacy behavior of forcing user IDs, template count, and score into \texttt{sensor\_value} fields (Table~\ref{tab:data_types}). This is the type safety that the generic sensor API cannot provide.
+
+\begin{table}[!ht]
+\caption{BASE Core Data Types}
+\label{tab:data_types}
+\centering
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{5pt}
+\begin{tabularx}{\columnwidth}{|l|X|}
+\hline
+\textbf{Type} & \textbf{Purpose} \\
+\hline
+\texttt{biometric\_capabilities} & Hardware features: \texttt{supported\_modalities} bitmask (multi-modal), max templates, samples required, storage modes \\
+\hline
+\texttt{biometric\_match\_result} & Match outcome: confidence, template ID, quality (0--100), \texttt{modality} field identifying which sensing modality produced the result \\
+\hline
+\texttt{biometric\_capture\_result} & Enrollment progress: samples captured/required, quality, assigned template ID \\
+\hline
+\texttt{biometric\_attribute} & Config: match thresholds, security levels, timeouts, duplicate enrollment policy \\
+\hline
+\texttt{biometric\_user\_info} & On-device user metadata: name string, privilege level \\
+\hline
+\end{tabularx}
+\end{table}
+
+\subsubsection{Enrollment and Match APIs}
+Enrollment abstracts the varying sample counts across hardware (e.g., 2 for ZFM, 3 for GT-5X, 1 for AI10). Applications repeatedly call \texttt{biometric\_enroll\_capture()} until \texttt{samples\_required} is met, then call \texttt{biometric\_enroll\_finalize()}. Similarly, the Match API hides hardware-specific search optimizations behind a unified \texttt{biometric\_match()} interface that supports both 1:1 verification and 1:N identification.
+
+\subsubsection{Auxiliary Match Output}
+Sensor-specific auxiliary output, such as liveness score blobs or custom data, would either pollute \\ \texttt{biometric\_match\_result} with union fields, breaking type safety, or require sensor-specific calls, breaking the abstraction. \texttt{biometric\_match\_get\_data()} resolves this: a standardized optional side-channel, null-guarded, with a defined retrieval window (must be called before the next match operation). Rich sensor output flows through a typed buffer without contaminating the universal result structure.
+
+\subsubsection{Portable Security Configuration}
+Security parameters (Table~\ref{tab:attributes}) map normalized 0--100/1--10 ranges to hardware-specific values via \texttt{biometric\_attr\_set()}. This enables zero-code-change policy portability, allowing seamless hardware swapping without altering application compliance logic.
+
+\begin{table}
+\caption{Security Configuration Attributes}
+\label{tab:attributes}
+\centering
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\columnwidth}{|l|c|X|}
+\hline
+\textbf{Attribute} & \textbf{Range} & \textbf{Function} \\
+\hline
+\texttt{MATCH\_THRESHOLD} & 0--100 & Min similarity score (\%) \\
+\hline
+\texttt{SECURITY\_LEVEL} & 1--10 & FAR (False Accept Rate) control \\
+\hline
+\texttt{ENROLL\_QUALITY} & 0--100 & Min image quality \\
+\hline
+\texttt{TIMEOUT\_MS} & 0--3.6M & Max operation timeout (ms) \\
+\hline
+\texttt{ANTI\_SPOOF} & 1--10 & Liveness detection sensitivity \\
+\hline
+\texttt{IMAGE\_QUALITY} & read-only & Last captured sample quality score \\
+\hline
+\texttt{DUPLICATE\_POLICY} & 0--1 & Reject (0) or allow (1) duplicate enrollments \\
+\hline
+\end{tabularx}
+\end{table}
+
+A sensor supporting 1--5 security levels maps the subsystem's 1--10 scale via \texttt{hw\_level = CLAMP((val+1)/2, 1, 5)}. An application that sets 80\% match threshold and security level 8 gets those exact values regardless of which sensor is on the board. The hardware can be easily swapped with no change in the policy. This increases accessibility and portability in security-critical deployments like payment terminals, medical device access control, industrial safety interlocks etc. It also supports compliance with NIST SP 800-63B \cite{nist_800_63b}, which requires specific False Accept Rates based on the authentication assurance level. Auditors can inspect devicetree bindings or application configuration to verify compliance without looking at the driver internals. For hardware-specific parameters, the enum reserves \texttt{BIOMETRIC\_ATTR\_PRIV\_START} and above for driver-private attributes, accessible through the same \texttt{biometric\_attr\_set()} interface without requiring sensor-specific headers in application code. The attribute-based security model aligns with contemporary recommendations for IoT device authentication\cite{wu2023attacks,sicari2015security}.
+
+\subsection{Enrollment State Machine}
+
+To guarantee deterministic behavior, BASE mandates a strict enrollment state machine via the MUST contract. Each driver enforces the state guard internally; \texttt{enroll\_finalize()} returns \texttt{-EINVAL} unless the driver has reached the ready state, making partial template storage impossible. Figure~\ref{fig:fsm} illustrates the transitions for a two-sample sensor.
+
+\begin{figure}
+    \centering
+    \resizebox{\columnwidth}{!}{%
+        \begin{tikzpicture}[->, >=stealth, node distance=2.5cm, auto, thick]
+            \node[state, initial] (idle) {$q_{\mathrm{idle}}$};
+            \node[state] (wait1) [right=of idle] {$q_{\mathrm{w\_1}}$};
+            \node[state] (wait2) [right=of wait1] {$q_{\mathrm{w\_2}}$};
+            \node[state, accepting] (ready) [below=of wait2] {$q_{\mathrm{ready}}$};
+
+            \path
+            (idle) edge [bend left] node {\texttt{start}} (wait1)
+            (wait1) edge [loop above] node {\texttt{capture\_fail}} (wait1)
+            (wait1) edge node {\texttt{capture\_ok}} (wait2)
+            (wait2) edge [loop above] node {\texttt{capture\_fail}} (wait2)
+            (wait2) edge node {\texttt{capture\_ok}} (ready)
+            (ready) edge [bend left=40] node {\texttt{finalize}} (idle);
+
+            \path[dashed, color=red]
+            (wait1) edge [bend left=40] node[below] {\texttt{abort}} (idle)
+            (wait2) edge [bend left=60] node[below] {\texttt{abort}} (idle);
+
+        \end{tikzpicture}%
+    }
+    \caption{State transition diagram for BASE enrollment workflow (Case $N=2$).}
+    \label{fig:fsm}
+\end{figure}
+
+\subsection{Interrupt-Driven I/O and Power Efficiency}
+\label{sec:interrupt_io}
+
+Legacy vendor libraries busy-wait during the \num{200}--\SI{500}{\milli\second} sensor capture window, keeping the CPU at full clock speed and preventing the scheduler from running other threads. BASE addresses this at two levels.
+
+At the \textbf{API level}, every blocking operation accepts a \texttt{k\_timeout\_t} parameter, making bounded blocking a contract requirement rather than a convention. This enables application-level deadline analysis without inspecting driver internals. For sensors supporting hardware-triggered recognition, BASE provides the functions \texttt{biometric\_match\_start()} and \texttt{biometric\_match\_stop()} with a registered callback handler, forming a complete async matching interface. The driver manages the recognition loop internally and invokes the callback per result, decoupling recognition events from the application thread.
+
+At the \textbf{driver level}, all UART transactions in the reference drivers are interrupt-driven via binary semaphores. On sensors without a hardware finger-detect interrupt (ZFM-X0, GT-5X), presence detection uses \texttt{k\_msleep}-based cooperative polling between queries. In all cases the calling thread yields the CPU throughout the capture window. This is validated empirically in Section~\ref{sec:eval_concurrency}.
+
+\subsection{Driver Implementation Contract}
+
+The driver contract uses three compliance tiers enforced by the API structure itself. \textbf{MUST} functions (six total: \texttt{get\_capabilities}, \texttt{enroll\_start}, \texttt{enroll\_capture}, \\ \texttt{enroll\_finalize}, \texttt{match}, \texttt{template\_delete}) are called unconditionally in their \texttt{z\_impl} wrappers; an unimplemented MUST function crashes at runtime. \textbf{SHOULD} functions cover template management, policy configuration, enrollment abort, async matching (\texttt{match\_set\_cb}, \texttt{match\_start}, \texttt{match\_stop}), auxiliary output (\texttt{match\_get\_data}), and user metadata; these return \texttt{-ENOSYS} if unimplemented. \textbf{MAY} functions cover hardware-dependent features such as LED control and image-based enrollment. The distinction is enforced by null guards in the subsystem header, not by convention.
+
+\subsection{Real-Time and Resource Analysis}
+
+All host-side operations maintain $O(1)$ time and space complexity; 1:N identification complexity resides within the sensor hardware. The schedulability impact of BASE's yielding I/O model is evaluated empirically in Section~\ref{sec:eval_concurrency}.
+
+\subsection{Security and Threat Model}
+\label{sec:threat_model}
+BASE may mitigate several attack vectors inherent to edge biometrics:
+\begin{itemize}
+    \item \textbf{Application Bug Exploitation:} Kernel-space driver isolation prevents an exploited userspace thread from locking the sensor state or bypassing authentication timeouts.
+    \item \textbf{Partial Enrollment Injection:} The deterministic driver state machine rejects incomplete capture sequences, preventing attackers from injecting partial or corrupted templates into the database.
+    \item \textbf{Command Bypasses:} Applications cannot send arbitrary raw hex commands directly to the hardware bus, mitigating undocumented backdoor access to the sensor firmware.
+    \item \textbf{Duplicate Enrollment:} The subsystem exposes a configurable duplicate enrollment policy, allowing operators to reject duplicate biometric registrations at the driver level and prevent identity aliasing attacks.
+\end{itemize}
+
+\subsection{OS-Agnostic Paradigm Mapping}
+\label{sec:os_agnostic}
+While we selected Zephyr for our reference implementation (Section~\ref{sec:implementation}), BASE's three-plane architecture is fundamentally OS-agnostic. By abstracting the enrollment state machine and data types into a strict contract, BASE maps cleanly to diverse embedded OS paradigms:
+\begin{itemize}
+    \item \textbf{POSIX-Compliant (e.g., Apache NuttX):} The Subsystem Contract Plane maps directly to the Virtual File System (VFS) as a character device (\texttt{/dev/biometric0}), utilizing standard \texttt{ioctl()} commands to configure security attributes.
+    \item \textbf{Device Frameworks (e.g., RT-Thread):} The architecture translates natively to an \texttt{rt\_device} class, encapsulating the state machine behind standard \texttt{rt\_device\_read()} and \texttt{rt\_device\_control()} interfaces.
+    \item \textbf{Capability-Based (e.g., TockOS):} BASE's state machine can be encapsulated as a trusted kernel capsule. The Application Plane interacts via asynchronous system calls (grants and upcalls) to guarantee strict memory safety between the kernel and untrusted userspace.
+\end{itemize}
+By enforcing correctness at the architectural level rather than the kernel level, BASE ensures that its core security and schedulability guarantees remain intact regardless of the host operating system's design philosophy.
+
+The reference implementation uses only three primitive categories: mutex, binary semaphore, and monotonic timeout, each of which maps directly to equivalents in NuttX, RT-Thread, TockOS, and bare-metal systems, confirming that porting BASE requires no architectural changes.
+
+\subsection{Distinction from Generic Driver Models}
+
+Although the three-plane design resembles layered driver models in Zephyr's sensor subsystem or Linux IIO, BASE's contract plane is fundamentally different: it is an \emph{active behavioral enforcer}. Generic subsystems only define a vtable and treat operations as stateless. BASE's contract plane mandates that drivers implement the enrollment state machine via the MUST contract. Each reference driver enforces the ready-state guard internally before committing a template. A driver that skips this guard violates the BASE contract and fails compliance. This architectural separation, subsystem defines the invariant, driver enforces it, is what distinguishes BASE from a generic vtable.

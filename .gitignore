@@ -1,0 +1,39 @@
+# LaTeX auxiliary/build files
+*.aux
+*.abs
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.fmt
+*.fot
+*.glg
+*.glo
+*.gls
+*.idx
+*.ilg
+*.ind
+*.ist
+*.lof
+*.log
+*.lol
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+
+# Latexmk and intermediate directories/files
+_latexmk/
+*.dvi
+
+# Generated PDF outputs (top-level only)
+/*.pdf
+
+# Editor/OS artifacts
+.DS_Store
+*~
+*.swp
+*.swo

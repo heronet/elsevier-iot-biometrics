@@ -1,0 +1,96 @@
+\section{Related Work and Motivation}
+\label{sec:related_work}
+
+\subsection{Biometric Authentication in IoT Systems}
+Password-based authentication is insufficient and inefficient for resource-constrained IoT devices \cite{alotaibi2025}. Biometric authentication is a smart and efficient solution for IoT authentication. However, unlike passwords, a compromised biometric template cannot be reset \cite{edge2024}, which shifts the focus to encrypting biometric systems \cite{biosec2020}. Adapting these solutions to microcontrollers with limited RAM, however, remains a problem to be addressed\cite{acm2023}.
+
+\subsection{Embedded Biometric Hardware Implementations}
+Early fingerprint matching on 8-bit microcontrollers demonstrated possibilities but faced architectural challenges in generalizing across sensor types\cite{fons2012biometrics}. Template security, on the other hand, remained an active area, with works addressing encryption for template protection\cite{murillo2015robust} and fuzzy extractor schemes for key generation\cite{tran2024biometrics}. These works addressed algorithm and security concerns, but the software integration problem remained. This is what motivated this research.
+
+\subsection{Software Integration Challenges}
+\subsubsection{Fragmentation Across Ecosystems}
+The biometric integration landscape is fragmented. Commercial SDKs exist but lock developers into proprietary APIs. Open-source implementations span single-threaded Arduino sketches to Linux-based systems, but each re-implements enrollment workflows from scratch\cite{mayron2015biometric}. The workflow incompatibility between two-step and three-step capture sequences forces per-sensor application logic. Academic prototypes on resource-rich platforms rely on full OS services\cite{restuccia2018survey} and ignore the multitasking and power constraints of RTOS systems. Recent surveys confirm this gap persists across IoT authentication research\cite{ahvanooey2022modern,yang2021biometric}. Table~\ref{tab:gap_matrix} evaluates representative approaches against the five integration requirements; no existing solution satisfies all five simultaneously.
+
+\begin{table*}[!htbp]
+\caption{Integration Gap Analysis Across Existing Approaches}
+\label{tab:gap_matrix}
+\centering
+\renewcommand{\arraystretch}{1.3}
+% This forces the table to shrink to exactly the width of the page
+\resizebox{\textwidth}{!}{
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{System} & \textbf{Architecture} & \textbf{RTOS-Aware} & \textbf{Type Safety} & \textbf{State Enforcement} & \textbf{Vendor Agnostic} & \textbf{MCU Constraints} \\
+\hline
+Linux fprintd\cite{linux_fprintd} & Userspace daemon, D-Bus IPC & No & High & OS-managed & Yes & No ($>$1 MB RSS) \\
+\hline
+Android BiometricPrompt\cite{android_bio} & Framework service, Binder IPC & No & High & OS-managed & Yes & No (MMU required) \\
+\hline
+ISO/IEC 29164\cite{iso29164} & Wire-protocol spec only & No & N/A & App responsibility & Partial & Partial \\
+\hline
+grow\_r502a\cite{zephyr_r502a} & Generic sensor adapter & Yes & Violated & App-managed flags & No & Yes \\
+\hline
+Arduino libs\cite{mayron2015biometric} & Blocking, single-threaded & No & Low & App-managed & No & Partial \\
+\hline
+\textbf{BASE (ours)} & \textbf{Kernel subsystem} & \textbf{Yes} & \textbf{Strict} & \textbf{Driver-enforced} & \textbf{Yes} & \textbf{Yes} \\
+\hline
+\end{tabular}
+}
+\end{table*}
+
+\subsubsection{The Blocking I/O Antipattern}
+We inspected vendor libraries (e.g., common Arduino fingerprint libraries) and found that they use busy-wait polling during the \num{200}--\SI{500}{\milli\second} image capture window, as shown in Figure~\ref{fig:blocking_comparison}. It is fine, as long as it is a single-threaded Arduino sketch. But in a multitasking RTOS, it blocks context switching \cite{zephyr_docs} and prevents the CPU from entering low-power idle states. This is a known inefficiency of blocking I/O in multitasking systems. The semaphore-based approach that BASE follows is standard RTOS driver practice.
+
+\begin{figure}
+\centering
+\begin{scriptsize}
+\begin{tabular}{p{0.45\columnwidth} | p{0.45\columnwidth}}
+\textbf{A. Vendor Library Pattern} & \textbf{B. BASE Pattern (Ours)} \\
+\hline
+\begin{verbatim}
+// Blocks CPU for ~500ms
+while (get_image() != OK) {
+   delay(100);
+   // CPU cannot sleep
+   // or switch tasks
+}
+\end{verbatim}
+&
+\begin{verbatim}
+// Yields CPU to Scheduler
+// Blocks only calling thread
+if (k_sem_take(&sem,
+      K_MSEC(500)) != 0) {
+   return -ETIMEDOUT;
+}
+\end{verbatim}
+\\
+\end{tabular}
+\end{scriptsize}
+\caption{Comparison of polling mechanisms. Vendor libraries (A) busy-wait, which prevents power-saving states. BASE (B) uses RTOS semaphores and cooperative yielding to release the CPU during sensor latency.}
+\label{fig:blocking_comparison}
+\end{figure}
+
+\subsection{Standardization Landscape}
+\subsubsection{High-Level Standards (ISO/IEC 19784)}
+ Linux \textit{fprintd} \cite{linux_fprintd} and Android BiometricPrompt \cite{android_bio} use the framework defined by ISO/IEC 19784 (BioAPI) \cite{iso19784}. The drawback is that they both rely on heavy IPC mechanisms, D-Bus on Linux, Binder on Android. It also assumes a memory-managed environment with MMUs and $>$\SI{1}{\mega\byte} RAM, which leaves a microcontroller with \SI{128}{\kilo\byte} total RAM and no MMU out of consideration.
+
+\subsubsection{Embedded Standards (ISO/IEC 29164)}
+ISO/IEC 29164 (Embedded BioAPI) \cite{iso29164} targets constrained devices and does its job well at the wire-protocol level. It defines the command encoding and message framing between host and biometric module but it does not specify host-side elements, such as concurrency handling, enrollment state management, or power management. This leaves the responsibility to the application developer. For a single-sensor, single-threaded project this is workable. For a multitasking RTOS deployment across heterogeneous sensors, it is not.
+
+\subsection{Inadequacy of Generic Sensor Subsystems}
+\label{sec:sensor_limitations}
+
+When we tried to develop a fingerprint sensor driver for Zephyr, our closest solution was to use the Sensor API. But it was not straightforward and required a lot of workarounds to get basic functionalities working. This is when we felt the need for a dedicated subsystem for biometrics. We looked at the existing \texttt{grow\_r502a} driver \cite{zephyr_r502a} and found the following architectural issues that application-level workarounds cannot resolve.
+
+\subsubsection{Semantic Mismatch and Type Safety Violations}
+The sensor API defines structures for physical measurements-\texttt{sensor\_value.val1}, \texttt{sensor\_value.val2} representing temperature or acceleration \cite{zephyr_sensor_api}. The \texttt{grow\_r502a} driver used these for storing user IDs or for template count, inconsistently \cite{zephyr_r502a_sample}. It treated a security principal as if it were a temperature reading. A lack of standardization also meant users must know the driver code to use it. This was not a flexible choice of the driver but forced by the API's data model. Any biometric driver built on the sensor subsystem hits this same wall, and the compiler cannot catch it because a user ID and a temperature reading are both just integers.
+
+\subsubsection{Stateless vs. Transactional Workflows}
+The sensor subsystem assumes a stateless fetch-and-get cycle \cite{zephyr_sensor_api}. Repeated reads return idempotent values, that is the general assumption. Whereas the biometric enrollment process is the opposite. It is a strict sequence (Start $\rightarrow$ Capture $\rightarrow$ Merge $\rightarrow$ Finalize) where each step depends on the previous one. Fitting this into a stateless API meant the application had to manage the state machine manually using flags \cite{zephyr_r502a}, and discarding driver abstraction entirely \cite{zephyr_driver}. It will be even worse, if the application calls steps out of order, or skips one, the sensor returns an error with no indication of which step failed which may leave the application in an undefined state.
+
+\subsubsection{Leaky Abstractions}
+The driver exposes operations through hardware-specific attributes like \texttt{SENSOR\_ATTR\_R502A\_RECORD\_DEL} through hardware-specific public headers. This clutters the OS as well as requires application code to include very specific headers like \texttt{<drivers/sensor/grow\_r502a.h>} \cite{zephyr_r502a}. Swap the sensor, and the application breaks. This is the textbook definition of a leaky abstraction \cite{zephyr_driver}, and it exists because the sensor subsystem was never designed for biometric workflows.
+
+\subsection{Summary: The Integration Gap}
+As Table~\ref{tab:gap_matrix} shows, every existing approach fails on at least two of the five requirements. Heavy userspace services handle type safety and vendor agnosticism but cannot run on MCUs. Generic sensor adapters run on MCUs but violate type safety and push state management to the application. No existing solution enforces transactional state at the driver level while satisfying MCU memory constraints. We translated these three failure modes into design requirements: strict biometric types enforced at the kernel level, driver-level state machines for enrollment workflows, and vendor-neutral attribute interfaces for security policy. For the reference implementation we chose Zephyr due to its subsystem architecture, Linux Foundation backing, and active industrial adoption. Section~\ref{sec:architecture} presents BASE's architecture around these requirements.

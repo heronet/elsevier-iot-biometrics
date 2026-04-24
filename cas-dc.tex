@@ -1,0 +1,202 @@
+%%
+%% Copyright 2019-2024 Elsevier Ltd
+%%
+%% This file is part of the 'CAS Bundle'.
+%% --------------------------------------
+%%
+%% It may be distributed under the conditions of the LaTeX Project Public
+%% License, either version 1.3c of this license or (at your option) any
+%% later version.  The latest version of this license is in
+%%    http://www.latex-project.org/lppl.txt
+%% and version 1.3c or later is part of all distributions of LaTeX
+%% version 1999/12/01 or later.
+%%
+%% The list of all files belonging to the 'CAS Bundle' is
+%% given in the file `manifest.txt'.
+%%
+%% Template article for cas-dc documentclass for
+%% double column output.
+
+\documentclass[a4paper,fleqn]{cas-dc}
+
+% If the frontmatter runs over more than one page
+% use the longmktitle option.
+
+%\documentclass[a4paper,fleqn,longmktitle]{cas-dc}
+
+\usepackage[numbers]{natbib}
+%\usepackage[authoryear]{natbib}
+% \usepackage[authoryear,longnamesfirst]{natbib}
+\usepackage{microtype}
+\usepackage{xurl}
+\usepackage{siunitx}
+\usepackage{tabularx}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, automata}
+
+%%%Author macros
+\def\tsc#1{\csdef{#1}{\textsc{\lowercase{#1}}\xspace}}
+\tsc{WGM}
+\tsc{QE}
+%%%
+
+% Uncomment and use as if needed
+%\newtheorem{theorem}{Theorem}
+%\newtheorem{lemma}[theorem]{Lemma}
+%\newdefinition{rmk}{Remark}
+%\newproof{pf}{Proof}
+%\newproof{pot}{Proof of Theorem \ref{thm}}
+
+\begin{document}
+\let\WriteBookmarks\relax
+\def\floatpagepagefraction{1}
+\def\textpagefraction{.001}
+
+% Short title
+\shorttitle{BASE: Biometric Architecture for RTOS}
+
+% Short author
+\shortauthors{}
+
+% Main title of the paper
+\title [mode = title]{BASE: A Multi-Modal Biometric Architecture for Resource-Constrained RTOS}
+
+% Title footnote mark
+% eg: \tnotemark[1]
+% \tnotemark[1]
+
+% Title footnote 1.
+% eg: \tnotetext[1]{Title footnote text}
+% \tnotetext[1]{}
+
+% First author
+%
+% Options: Use if required
+% eg: \author[1,3]{Author Name}[type=editor,
+%       style=chinese,
+%       auid=000,
+%       bioid=1,
+%       prefix=Sir,
+%       orcid=0000-0000-0000-0000,
+%       facebook=<facebook id>,
+%       twitter=<twitter id>,
+%       linkedin=<linkedin id>,
+%       gplus=<gplus id>]
+
+\author[1,2]{Md~Siratul~Islam}[orcid=0009-0005-5945-8563]
+
+% Footnote of the first author
+\fnmark[1]
+
+% Email id of the first author
+\ead{email@sirat.me}
+
+% URL of the first author
+% \ead[url]{}
+
+% Credit authorship
+% eg: \credit{Conceptualization of this study, Methodology, Software}
+\credit{Conceptualization, Methodology, Software, Writing}
+
+% Address/affiliation
+\affiliation[1]{organization={Department of Physics, Shahjalal University of Science and Technology},
+            city={Sylhet},
+            citysep={}, % Uncomment if no comma needed between city and postcode
+            postcode={3114},
+            state={Sylhet},
+            country={Bangladesh}}
+
+\author[2]{Md~Rasedujjaman}[orcid=0000-0002-8276-1860]
+
+% Corresponding author indication
+\cormark[1]
+
+% Footnote of the second author
+\fnmark[2]
+
+% Email id of the second author
+\ead{mrased-eee@sust.edu}
+
+% URL of the second author
+% \ead[url]{}
+
+% Credit authorship
+\credit{Supervision, Review \& Editing}
+
+% Address/affiliation
+\affiliation[2]{organization={Department of Electrical and Electronic Engineering, Shahjalal University of Science and Technology},
+            city={Sylhet},
+            citysep={}, % Uncomment if no comma needed between city and postcode
+            postcode={3114},
+            state={Sylhet},
+            country={Bangladesh}}
+
+% Corresponding author text
+\cortext[1]{Corresponding author}
+
+% Footnote text
+% \fntext[1]{}
+
+% For a title note without a number/mark
+%\nonumnote{}
+
+% Here goes the abstract
+\begin{abstract}
+Biometric authentication is replacing passwords in IoT devices, but developers face severe fragmentation as sensors ship with proprietary protocols and vendor-locked SDKs. They must choose between resource-heavy userspace frameworks unsuitable for microcontrollers or vendor-specific libraries that create hardware lock-in. We present the Biometric Abstraction for Secure Edge (BASE), the first dedicated kernel-level biometric subsystem for resource-constrained Real-Time Operating Systems. BASE decouples application logic from hardware specifics using driver-enforced state machines, standardized security attributes, and type-safe data structures. We validated BASE across three physical sensor families spanning contact fingerprint and camera-based multi-modal recognition (face and palm vein), with zero application code changes across all three. A minimum footprint of \SI{3.5}{\kilo\byte} Flash and \SI{644}{\byte} RAM confirms suitability for constrained MCUs. BASE has been merged into the Zephyr mainline kernel as the official biometrics subsystem.
+\end{abstract}
+
+% Use if graphical abstract is present
+%\begin{graphicalabstract}
+%\includegraphics{}
+%\end{graphicalabstract}
+
+% Research highlights
+\begin{highlights}
+\item A kernel-level biometric subsystem for resource-constrained RTOS.
+\item Solves vendor lock-in across multi-modal biometric sensors.
+\item Enforces deterministic enrollment state machines directly within the driver.
+\item Enables zero-code-change app portability across various biometric sensor types.
+\item Merged into Zephyr RTOS mainline as the official biometric subsystem.
+\end{highlights}
+
+%\nocite{*}
+
+% Keywords
+% Each keyword is seperated by \sep
+\begin{keywords}
+ IoT Security \sep Biometrics \sep Minimal Operating Systems \sep Device Software Development \sep Real-Time Operating Systems \sep Hardware Abstraction \sep Zephyr RTOS
+\end{keywords}
+
+\maketitle
+
+% Main text
+\input{sections/01_introduction}
+\input{sections/02_related_work}
+\input{sections/03_architecture}
+\input{sections/04_implementation}
+\input{sections/05_evaluation}
+\input{sections/06_conclusion}
+\input{sections/07_acknowledgment}
+
+% To print the credit authorship contribution details
+\printcredits
+
+%% Loading bibliography style file
+% \bibliographystyle{model1-num-names}
+\bibliographystyle{cas-model2-names}
+
+% Loading bibliography database
+\bibliography{cas-refs}
+
+% Biography
+\bio{}
+Md Siratul Islam is currently pursuing the B.Sc. degree in Physics at Shahjalal University of Science and Technology (SUST), Sylhet, Bangladesh. He serves as a Research Assistant in the Department of Electrical and Electronic Engineering (EEE), focusing on embedded systems and real-time operating systems.
+
+He is the maintainer of the biometrics subsystem in the Zephyr Project, where his BASE implementation was accepted into the mainline OS. His research interests include secure IoT architecture, kernel-level driver development, and energy-efficient computing for edge devices. He is currently working on a FIDO2 subsystem for Zephyr.
+\endbio
+
+\bio{}
+Md Rasedujjaman is currently with the Department of Electrical and Electronic Engineering, Shahjalal University of Science and Technology (SUST), Sylhet, Bangladesh. His research interests include optical systems, signal processing, and IoT security protocols.
+\endbio
+
+\end{document}

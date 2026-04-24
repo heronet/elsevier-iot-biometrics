@@ -1,0 +1,108 @@
+\section{Implementation}
+\label{sec:implementation}
+
+\subsection{Zephyr RTOS Integration}
+
+The subsystem header (\texttt{drivers/biometrics.h}) defines the public API using static inline wrappers. Each public API function carries the \texttt{\_\_syscall} annotation, triggering kernel-mode dispatch code generation per entry point.
+
+\begin{table}
+\caption{Implementation Metrics (WeAct STM32F446RE)}
+\label{tab:implementation_metrics}
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabularx}{\columnwidth}{|X|c|c|c|}
+\hline
+\textbf{Component} & \textbf{Flash (B)} & \textbf{Static RAM (B)} & \textbf{Heap (B)} \\
+\hline
+BASE Core API & 0 (Inlined) & 0 & 0 \\
+\hline
+ZFM-X0 Driver & 3,514 & 644 & 0 \\
+\hline
+GT-5X Driver & 4,288 & 144 & $\sim$520 \\
+\hline
+AI10 Driver & 4,974 & 2,176 & 0 \\
+\hline
+Typical Config & $<$ \SI{5}{\kilo\byte} & $<$ \SI{3}{\kilo\byte} & $<$ \SI{1}{\kilo\byte} \\
+\hline
+\end{tabularx}
+\vspace{2pt}
+\footnotesize{\\ \textit{Note: GT-5X uses dynamic allocation for packet buffers; ZFM-X0 and AI10 use static buffers. AI10 RAM includes dual frame buffers and continuous match thread state. AI10 figures reflect a pre-upstream implementation; the driver is under active development and footprint may change prior to merge.}}
+\end{table}
+
+\subsection{Driver Implementations}
+
+\subsubsection{ZFM-X0 Family Driver}
+
+The ZFM-X0 driver targets the ZhianTec protocol family (ZFM-20/60/70 and rebrands including Adafruit, Grow R307, and Hi-Link capacitive modules). It uses a variable-length packet format with checksum validation and fully interrupt-driven UART communication via semaphores. The driver enforces the four-state enrollment machine and supports both optical and capacitive sensors with identical code.
+
+\subsubsection{GT-5X Family Driver}
+
+The GT-5X driver targets the ADH-Tech optical family (GT-511C3/521F32/521F52). It implements the fixed 12-byte command protocol with 29 opcodes. The driver uses dynamic allocation only for packet buffers while satisfying the $O(1)$ memory contract and requires three samples for enrollment.
+
+\subsubsection{DFRobot AI10 Driver (Multi-Modal)}
+
+The AI10 driver targets the DFRobot SEN0677 module, a binocular camera-based sensor supporting face recognition and palm vein detection on a single device. This is the first driver in the BASE ecosystem to demonstrate the multi-modal capability: \texttt{get\_capabilities()} reports \texttt{supported\_modalities = BIOMETRIC\_MODALITY\_FACE | BIOMETRIC\_MODALITY\_PALM}. The driver maps face UIDs (1--1000) and palm UIDs (1001--2000) transparently into the standard \texttt{biometric\_match\_result} structure by setting the \texttt{modality} field accordingly. Enrollment uses a single-shot command, but the application loop remains identical across all drivers because it checks \texttt{samples\_required} (set to 1 for AI10).
+
+\subsubsection{Protocol Comparison}
+
+Table~\ref{tab:protocol_comparison} summarizes the three driver families.
+
+\begin{table*}[!ht]
+\caption{Driver Protocol Comparison}
+\label{tab:protocol_comparison}
+\centering
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\begin{tabularx}{\textwidth}{|l|X|X|X|}
+\hline
+\textbf{Feature} & \textbf{ZFM-X0} & \textbf{GT-5X} & \textbf{DFRobot AI10} \\
+\hline
+Sensor Type & Optical/Capacitive contact & Optical contact & Camera-based, binocular \\
+\hline
+Modalities & Fingerprint & Fingerprint & Face + Palm vein \\
+\hline
+Start Code & \texttt{0xEF01} & \texttt{0x55AA}/\texttt{0x5AA5} & \texttt{0xEF 0xAA} \\
+\hline
+Packet Size & Variable (9--267 B) & Fixed (12 B) & Variable + XOR \\
+\hline
+Enrollment Samples & 2 & 3 & 1 (single-shot) \\
+\hline
+Checksum & Payload sum & All-bytes sum & XOR over header+data \\
+\hline
+Memory & Static buffers & Dynamic heap & Static buffers \\
+\hline
+\texttt{supported\_modalities} & \texttt{FINGERPRINT} & \texttt{FINGERPRINT} & \texttt{FACE | PALM} \\
+\hline
+\end{tabularx}
+\smallskip
+\par\noindent\footnotesize\textit{Note: ZFM-X0 supports both optical and capacitive sensors with identical driver code. AI10 UID range 1--1000 maps to face; 1001--2000 maps to palm, handled transparently by the driver.}
+\end{table*}
+
+\subsection{Devicetree Integration}
+
+BASE drivers use Zephyr's devicetree for hardware configuration. Example binding for the ZFM-X0 family:
+
+\begin{small}
+\begin{verbatim}
+&uart2 {
+  status = "okay";
+  current-speed = <57600>;
+  fingerprint0: zfm60@0 {
+    compatible = "zhiantec,zfm-x0";
+    comm-addr = <0xFFFFFFFF>;
+    password = <0x00000000>;
+  };
+};
+\end{verbatim}
+\end{small}
+
+We use devicetree properties to configure communication parameters like baud rate, address, and other sensor settings. \texttt{DT\_INST\_FOREACH\_STATUS\_OKAY} ensures automatic device structure generation. This allows multiple sensors to coexist without manual registration code.
+
+\subsection{Robustness and Validation}
+All blocking operations accept \texttt{k\_timeout\_t} parameters. \texttt{K\_NO\_WAIT} can be used for instant operations, \texttt{K\_FOREVER} can be used for indefinite wait, or specific timeouts for deterministic timeouts. Overflow protection is capped at 3600 seconds. Template IDs are bounds-checked against \texttt{max\_templates}, attribute values are range-checked, and timeout values are clamped. UART RX handlers detect overflow, invalid lengths, and checksum mismatches. It sets error flags that are checked after semaphore acquisition to prevent invalid data.
+
+We validated the drivers on six physical devices (GT-511C3, DY-50, JM-101, Grow R307, HLK-ZW3021, HLK-ZW0623) and the WeAct STM32F446RE board, confirming cross-architecture compatibility and protocol-level abstraction across optical and capacitive sensors.
+
+\subsection{Upstream Availability}
+\label{sec:availability}
+The reference implementation of BASE has been merged\cite{zephyr_pr, zephyr_pr2} into the Zephyr upstream kernel and released as part of Zephyr 4.4\cite{zephyr_44_notes}. As the designated maintainer of this subsystem, the first author ensures ongoing architectural consistency and the integration of future biometric modalities for the open-source industrial community.
