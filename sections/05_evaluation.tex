@@ -5,7 +5,7 @@ To ensure the reproducibility of our empirical results, the source code, devicet
 
 \subsection{Memory Footprint}
 
-As shown in Table~\ref{tab:implementation_metrics}, BASE requires a minimum of \SI{3.6}{\kilo\byte} Flash and \SI{644}{\byte} RAM for a complete fingerprint subsystem and driver (ZFM-X0).
+As shown in Table~\ref{tab:implementation_metrics}, BASE requires a minimum of \SI{3.5}{\kilo\byte} Flash and \SI{644}{\byte} RAM for a complete fingerprint subsystem and driver (ZFM-X0).
 
 \subsection{Abstraction Overhead}
 
@@ -40,12 +40,22 @@ Devicetree & Update string & Update string & Update string \\
 \end{tabularx}
 \end{table}
 
-The GT-521F32 to AI10 migration crosses a modality boundary: from a contact fingerprint sensor to a camera-based device reporting two modalities. The application enrollment and match loop required no changes. The \texttt{samples\_required} field adapts from 2 (ZFM-X0) to 3 (GT-5X) to 1 (AI10) transparently. The \texttt{biometric\_match\_result.modality} field allows the application to distinguish face from palm results on the AI10 if needed, without any conditional compilation or sensor-specific headers.
+\begin{figure}
+    \centering
+    \includegraphics[width=\columnwidth]{figs/fig_loc.pdf}
+    \caption{LOC migration comparison.}
+    \label{fig:loc}
+\end{figure}
+
+
+The GT-521F32 to AI10 migration crosses a modality boundary: from a contact fingerprint sensor to a camera-based device reporting two modalities. The application enrollment and match loop required no changes. The \texttt{samples\_required} field adapts from 2 (ZFM-X0) to 3 (GT-5X) to 1 (AI10) transparently. The \texttt{biometric\_match\_result.modality} field allows the application to distinguish face from palm results on the AI10 if needed, without any conditional compilation or sensor-specific headers. Figure \ref{fig:loc} visualizes the lines of application code (LOC) changed during this migration. While the legacy approach requires rewriting enrollment logic and hardware operations, BASE achieves modality migration with zero modifications to the application plane
 
 \subsection{Concurrent RTOS Workload Analysis}
 \label{sec:eval_concurrency}
 
-To empirically validate BASE's schedulability claims, we measured deadline adherence of a high-priority control task ($\tau_1$) while a low-priority biometric task ($\tau_2$) ran a \SI{500}{\milli\second} capture sequence on the STM32F446RE.
+To empirically validate BASE's schedulability claims and demonstrate its strict hardware-agnostic design, we evaluated the concurrent workload on an Espressif ESP32-S3 (Xtensa architecture), complementing the STM32F446RE (ARM Cortex-M4) used for our static memory profiling. By migrating the real-time scheduling evaluation to an entirely different Instruction Set Architecture (ISA), we ensure that BASE's deterministic behavior does not rely on ARM-specific behavior.
+
+We measured deadline adherence of a high-priority control task ($\tau_1$) while a low-priority biometric task ($\tau_2$) ran a \SI{500}{\milli\second} capture sequence on the ESP32-S3.
 
 \textbf{Setup:} $\tau_1$ (priority 2) executes a \SI{10}{\milli\second} periodic loop and records its actual period using \texttt{k\_uptime\_ticks()}. A deadline miss is counted when the measured period exceeds the \SI{10}{\milli\second} target by more than \SI{1}{\milli\second}. $\tau_2$ (priority 8) runs concurrently in two configurations:
 
@@ -56,7 +66,7 @@ To empirically validate BASE's schedulability claims, we measured deadline adher
 
 \textbf{Results:} Table~\ref{tab:concurrency} summarizes the measurements over 200 samples.
 
-\begin{table}[!ht]
+\begin{table}
 \caption{Concurrent Workload: $\tau_1$ Deadline Adherence (200 samples)}
 \label{tab:concurrency}
 \centering
@@ -66,8 +76,8 @@ To empirically validate BASE's schedulability claims, we measured deadline adher
 \textbf{Mode} & \textbf{Max Jitter} & \textbf{Avg Jitter} &
 \textbf{Missed} \\
 \hline
-Legacy (busy-wait) & \SI{490}{\milli\second} & \SI{167}{\milli\second}
-& 68 / 200 \\
+Legacy (busy-wait) & \SI{490}{\milli\second} & \SI{245}{\milli\second}
+& 100 / 200 \\
 \hline
 BASE (yielding) & \SI{100}{\micro\second} &
 \SI{100}{\micro\second} & 0 / 200 \\
@@ -75,7 +85,30 @@ BASE (yielding) & \SI{100}{\micro\second} &
 \end{tabularx}
 \end{table}
 
-Under the legacy baseline, $\tau_2$ monopolized the CPU for the full \SI{500}{\milli\second} capture window on each iteration, causing $\tau_1$ to miss 68 of 200 deadlines with a maximum jitter of \SI{490}{\milli\second}. Under BASE, $\tau_2$ yielded the CPU on each \texttt{enroll\_capture} call via cooperative polling and semaphore-based UART synchronization. $\tau_1$ missed zero deadlines across all 200 samples, with a maximum jitter of \SI{100}{\micro\second}, consistent with a single scheduling tick of overhead at the configured tick rate. This confirms that BASE allows heavy biometric processing to coexist with hard real-time tasks without deadline violation.
+\begin{figure}
+    \centering
+    \includegraphics[width=\columnwidth]{figs/fig_jitter.pdf}
+    \caption{Jitter analysis for legacy and BASE implementations.}
+    \label{fig:jitter}
+\end{figure}
+
+Under the legacy baseline, $\tau_2$ monopolized the CPU for the full \SI{500}{\milli\second} capture window on each iteration. Due to the 50\% duty cycle of the blocking execution loop, $\tau_1$ missed exactly 100 of 200 deadlines (50\% failure rate) with an average jitter of \SI{245}{\milli\second} and a maximum jitter of \SI{490}{\milli\second}. Figure~\ref{fig:timeline_scatter} illustrates the chronological distribution of these misses. The legacy execution forms a strict alternating square-wave pattern between on-time execution and catastrophic blocking delays.
+
+\begin{figure*}
+    \centering
+    \includegraphics[width=\textwidth]{figs/fig_timeline_scatter.pdf}
+    \caption{Timeline chronological scatter plot illustrating the sequential deadline misses and maximum jitter per sample.}
+    \label{fig:timeline_scatter}
+\end{figure*}
+
+Under BASE, $\tau_2$ yielded the CPU on each \texttt{enroll\_capture} call via cooperative polling and semaphore-based UART synchronization. $\tau_1$ missed zero deadlines across all 200 samples. The maximum jitter was reduced to a flat \SI{100}{\micro\second}, which represents the baseline context switch and semaphore signaling latency of the RTOS, proving that the architecture introduces zero systemic blocking. Figure~\ref{fig:cdf} plots the Cumulative Distribution Function (CDF) of this scheduling jitter on a logarithmic scale. This visually isolates the absolute determinism of BASE (a sheer vertical drop at \SI{100}{\micro\second}) from the legacy failure pattern (crossing the \SI{1}{\milli\second} deadline), confirming that BASE allows heavy biometric processing to coexist with hard real-time tasks without deadline violation.
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\columnwidth]{figs/fig_cdf.pdf}
+    \caption{Cumulative Distribution Function (CDF) of scheduling jitter on a logarithmic scale.}
+    \label{fig:cdf}
+\end{figure}
 
 \subsection{Multi-Modal Validation}
 \label{sec:eval_multimodal}

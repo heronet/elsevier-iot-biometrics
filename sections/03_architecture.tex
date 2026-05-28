@@ -7,54 +7,12 @@ We designed BASE to directly address the integration barriers identified in Sect
 
 BASE separates concerns across three layers (Figure~\ref{fig:architecture}). The Application Plane provides unified enrollment and matching interfaces via standard RTOS system calls. The Subsystem Contract Plane normalizes hardware capabilities, enforces type safety, and abstracts protocol-specific details. The Driver Implementation Plane isolates all vendor-specific UART/SPI protocols and sensor state. No layer reaches past its boundary.
 
-\begin{figure}
-\centering
-\resizebox{\columnwidth}{!}{%
-\begin{tikzpicture}[
-    auto,
-    node distance=0.6cm,
-    base/.style={rectangle, draw=black!60, thick, align=center, rounded corners=2pt, font=\small\sffamily},
-    layer/.style={base, text width=7.5cm, minimum height=1.4cm},
-    driver/.style={base, text width=2.0cm, minimum height=1.2cm, fill=orange!5},
-    hw/.style={base, text width=2.0cm, minimum height=0.8cm, draw=black!40, dashed, fill=gray!5, font=\scriptsize\sffamily},
-    arrow/.style={-Latex, thick, draw=black!70}
-]
-
-    \node [layer, fill=blue!5] (app) {
-        \textbf{Application Plane}\\
-        \texttt{biometric\_match()}\\
-        \textit{\scriptsize (Hardware Agnostic API)}
-    };
-
-    \node [layer, fill=green!5, below=of app] (subsys) {
-        \textbf{Subsystem Contract Plane}\\
-        Normalization \& Validation\\
-        \textit{\scriptsize (Type Safety Enforced)}
-    };
-
-    \node [driver, below=1cm of subsys, xshift=-2.6cm] (drv1) {\textbf{ZFM Driver}\\(Packet Mode)};
-    \node [driver, below=1cm of subsys, xshift=0cm]    (drv2) {\textbf{GT-5X Driver}\\(Command Mode)};
-    \node [driver, below=1cm of subsys, xshift=2.6cm]  (drv3) {\textbf{AI10 Driver}\\(Face/Palm)};
-
-    \node [hw, below=0.3cm of drv1] (hw1) {ZFM Sensor};
-    \node [hw, below=0.3cm of drv2] (hw2) {GT-521F32};
-    \node [hw, below=0.3cm of drv3] (hw3) {DFRobot AI10};
-
-    \draw [arrow] (app) -- (subsys);
-
-    \draw [arrow] (subsys.south) -- +(0,-0.5) -| (drv1.north);
-    \draw [arrow] (subsys.south) -- +(0,-0.5) -| (drv2.north);
-    \draw [arrow] (subsys.south) -- +(0,-0.5) -| (drv3.north);
-
-    \draw [arrow, dashed] (drv1) -- (hw1);
-    \draw [arrow, dashed] (drv2) -- (hw2);
-    \draw [arrow, dashed] (drv3) -- (hw3);
-
-\end{tikzpicture}%
-}
-\caption{Three-plane architecture of BASE. The contract plane dispatches to three driver families spanning contact fingerprint (ZFM-X0, GT-5X) and camera-based multi-modal sensing (AI10). No layer reaches past its boundary.}
-\label{fig:architecture}
-\end{figure}
+\begin{figure*}
+    \centering
+    \includegraphics[width=\textwidth]{figs/fig_architecture.pdf}
+    \caption{Three-plane architecture of BASE. The contract plane dispatches to three driver families spanning contact fingerprint (ZFM-X0, GT-5X) and camera-based multi-modal sensing (AI10). No layer reaches past its boundary.}
+    \label{fig:architecture}
+\end{figure*}
 
 The Application Plane provides unified enrollment, matching, and template management interfaces. Applications never access hardware drivers directly. All public functions are defined via standard RTOS system calls (e.g., Zephyr's \texttt{\_\_syscall} annotation, which generates kernel-mode dispatch for each entry point), allowing the driver to run in privileged mode while the application runs in userspace. On POSIX-compliant systems such as NuttX, the same boundary is enforced via VFS \texttt{ioctl()} calls; on capability-based systems such as TockOS, via capsule syscalls. This protects the biometric state machine from application-level crashes or memory corruption. Errors are indicated by standard POSIX error codes (i.e., EBUSY, EINVAL).
 
@@ -68,7 +26,7 @@ The Driver Implementation Plane consists of hardware drivers that comply with th
 
 We defined five core types based on biometric concerns: capabilities, match outcomes, enrollment progress, policy configuration, and on-device user metadata. This allowed us to replace the legacy behavior of forcing user IDs, template count, and score into \texttt{sensor\_value} fields (Table~\ref{tab:data_types}). This is the type safety that the generic sensor API cannot provide.
 
-\begin{table}[!ht]
+\begin{table}
 \caption{BASE Core Data Types}
 \label{tab:data_types}
 \centering
@@ -128,6 +86,13 @@ Security parameters (Table~\ref{tab:attributes}) map normalized 0--100/1--10 ran
 \end{table}
 
 A sensor supporting 1--5 security levels maps the subsystem's 1--10 scale via \texttt{hw\_level = CLAMP((val+1)/2, 1, 5)}. An application that sets 80\% match threshold and security level 8 gets those exact values regardless of which sensor is on the board. The hardware can be easily swapped with no change in the policy. This increases accessibility and portability in security-critical deployments like payment terminals, medical device access control, industrial safety interlocks etc. It also supports compliance with NIST SP 800-63B \cite{nist_800_63b}, which requires specific False Accept Rates based on the authentication assurance level. Auditors can inspect devicetree bindings or application configuration to verify compliance without looking at the driver internals. For hardware-specific parameters, the enum reserves \texttt{BIOMETRIC\_ATTR\_PRIV\_START} and above for driver-private attributes, accessible through the same \texttt{biometric\_attr\_set()} interface without requiring sensor-specific headers in application code. The attribute-based security model aligns with contemporary recommendations for IoT device authentication\cite{wu2023attacks,sicari2015security}.
+
+\begin{figure*}
+    \centering
+    \includegraphics[width=\textwidth]{figs/fig_normalization.pdf}
+    \caption{Attribute normalization mapping curves.}
+    \label{fig:normalization}
+\end{figure*}
 
 \subsection{Enrollment State Machine}
 

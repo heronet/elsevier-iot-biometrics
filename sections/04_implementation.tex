@@ -20,14 +20,19 @@ ZFM-X0 Driver & 3,514 & 644 & 0 \\
 \hline
 GT-5X Driver & 4,288 & 144 & $\sim$520 \\
 \hline
-AI10 Driver & 4,974 & 2,176 & 0 \\
-\hline
-Typical Config & $<$ \SI{5}{\kilo\byte} & $<$ \SI{3}{\kilo\byte} & $<$ \SI{1}{\kilo\byte} \\
+Typical Config & $<$ \SI{5}{\kilo\byte} & $<$ \SI{150}{\byte} & $<$ \SI{1}{\kilo\byte} \\
 \hline
 \end{tabularx}
 \vspace{2pt}
-\footnotesize{\\ \textit{Note: GT-5X uses dynamic allocation for packet buffers; ZFM-X0 and AI10 use static buffers. AI10 RAM includes dual frame buffers and continuous match thread state. AI10 figures reflect a pre-upstream implementation; the driver is under active development and footprint may change prior to merge.}}
+\footnotesize{\\ \textit{Note: GT-5X uses dynamic allocation for packet buffers; ZFM-X0 uses static buffers.}}
 \end{table}
+
+\begin{figure}
+    \centering
+    \includegraphics[width=\columnwidth]{figs/fig_memory.pdf}
+    \caption{Memory footprint breakdown for ZFM-X0 and GT-5X drivers, illustrating Flash, Static RAM, and Heap utilization.}
+    \label{fig:memory_footprint}
+\end{figure}
 
 \subsection{Driver Implementations}
 
@@ -105,4 +110,4 @@ We validated the drivers on six physical devices (GT-511C3, DY-50, JM-101, Grow 
 
 \subsection{Upstream Availability}
 \label{sec:availability}
-The reference implementation of BASE has been merged\cite{zephyr_pr, zephyr_pr2} into the Zephyr upstream kernel and released as part of Zephyr 4.4\cite{zephyr_44_notes}. As the designated maintainer of this subsystem, the first author ensures ongoing architectural consistency and the integration of future biometric modalities for the open-source industrial community.
+The reference implementation of BASE has been merged\cite{zephyr_pr} into the Zephyr upstream kernel and released as part of Zephyr 4.4\cite{zephyr_44_notes}. As the designated maintainer of this subsystem, the first author ensures ongoing architectural consistency and the integration of future biometric modalities for the open-source industrial community.
