@@ -52,6 +52,50 @@ We defined five core types based on biometric concerns: capabilities, match outc
 \subsubsection{Enrollment and Match APIs}
 Enrollment abstracts the varying sample counts across hardware (e.g., 2 for ZFM, 3 for GT-5X, 1 for AI10). Applications repeatedly call \texttt{biometric\_enroll\_capture()} until \texttt{samples\_required} is met, then call \texttt{biometric\_enroll\_finalize()}. Similarly, the Match API hides hardware-specific search optimizations behind a unified \texttt{biometric\_match()} interface that supports both 1:1 verification and 1:N identification.
 
+\subsubsection{API Correctness Contracts}
+
+We specify the behavioral obligations of BASE drivers using Hoare triple notation $\{P\}\;C\;\{Q\}$, where $P$ is the precondition and $Q$ the postcondition for operation $C$. $\mathtt{stored}(\mathit{id})$ denotes template $\mathit{id}$ is persistently committed; $\mathtt{exists}(\mathit{dev},\mathit{id})$ denotes it is present; $\mathrm{DB}$ is the set of enrolled templates.
+
+\paragraph{Enrollment start:}
+\begin{multline}
+  \{\mathrm{state} = q_{\mathrm{idle}}\}\;\;
+  \mathtt{enroll\_start}(\mathit{dev},\,\mathit{id})\;\; \\
+  \{\mathrm{state} = q_{\mathrm{w},1} \;\wedge\; \mathtt{enrolled\_id} = \mathit{id}\}
+\end{multline}
+
+\paragraph{Sample capture:} For $1 \le k \le N$, with $\sigma$
+the outcome symbol (\texttt{capture\_ok} or \texttt{capture\_fail}) corresponding to the return value:
+\begin{multline}
+  \{\mathrm{state} = q_{\mathrm{w},k}\}\;\;
+  \mathtt{enroll\_capture}(\mathit{dev},\,t,\,\&r)\\
+  \{\mathrm{state} = \delta(q_{\mathrm{w},k},\,\sigma)\}
+\end{multline}
+
+\paragraph{Template finalization:}
+Here $\mathit{id}$ is the logical variable bound by the preceding $\mathtt{enroll\_start}(\mathit{dev},\,\mathit{id})$ call.
+\begin{multline}
+  \{\mathrm{state} = q_{\mathrm{ready}}
+   \;\wedge\; \mathtt{enrolled\_id} = \mathit{id}\}\;\; \\
+  \mathtt{enroll\_finalize}(\mathit{dev})\\
+  \{\mathrm{state} = q_{\mathrm{idle}}
+   \;\wedge\; \mathtt{stored}(\mathit{id})\}
+\end{multline}
+
+\paragraph{Match non-interference.}
+\begin{multline}
+  \{\mathrm{DB} = \mathrm{DB}_0\}\;\;
+  \mathtt{match}(\mathit{dev},\,\mathit{mode},\,\mathit{id},\,t,\,\&r)\\
+  \{\mathrm{DB} = \mathrm{DB}_0\}
+\end{multline}
+
+\paragraph{Template deletion.}
+\begin{multline}
+  \{\mathtt{exists}(\mathit{dev},\,\mathit{id})\}\;\;
+  \mathtt{template\_delete}(\mathit{dev},\,\mathit{id})\;\; \\
+  \{\neg\,\mathtt{exists}(\mathit{dev},\,\mathit{id})\}
+\end{multline}
+
+
 \subsubsection{Auxiliary Match Output}
 Sensor-specific auxiliary output, such as liveness score blobs or custom data, would either pollute \\ \texttt{biometric\_match\_result} with union fields, breaking type safety, or require sensor-specific calls, breaking the abstraction. \texttt{biometric\_match\_get\_data()} resolves this: a standardized optional side-channel, null-guarded, with a defined retrieval window (must be called before the next match operation). Rich sensor output flows through a typed buffer without contaminating the universal result structure.
 
@@ -96,7 +140,66 @@ A sensor supporting 1--5 security levels maps the subsystem's 1--10 scale via \t
 
 \subsection{Enrollment State Machine}
 
-To guarantee deterministic behavior, BASE mandates a strict enrollment state machine via the MUST contract. Each driver enforces the state guard internally; \texttt{enroll\_finalize()} returns \texttt{-EINVAL} unless the driver has reached the ready state, making partial template storage impossible. Figure~\ref{fig:fsm} illustrates the transitions for a two-sample sensor.
+To guarantee deterministic behavior, BASE mandates a strict enrollment state machine via the MUST contract. We formalize this as a Deterministic Finite Automaton $\mathcal{A} = (Q, \Sigma, \delta, q_0, F)$. \\
+
+\noindent\textbf{States.} For a sensor requiring $N$ samples:
+\begin{equation}
+  Q = \{q_{\mathrm{idle}},\;
+        q_{\mathrm{w},1},\; \ldots,\; q_{\mathrm{w},N},\;
+        q_{\mathrm{ready}}\}
+  \label{eq:states}
+\end{equation}
+$q_{\mathrm{idle}}$: subsystem inactive. $q_{\mathrm{w},k}$: enrollment active, $k{-}1$ samples captured, awaiting the $k$-th. $q_{\mathrm{ready}}$: all $N$ samples captured; driver authorized to commit the template. \\
+
+\noindent\textbf{Input alphabet:}
+\begin{multline}
+  \Sigma = \{\mathtt{start},\;
+             \mathtt{capture\_ok},\;
+             \mathtt{capture\_fail},\; \\
+             \mathtt{finalize},\;
+             \mathtt{abort}\}
+  \label{eq:alphabet}
+\end{multline}
+
+\noindent\textbf{Transition function:}
+\begin{align}
+  \delta(q_{\mathrm{idle}},\; \mathtt{start})
+    &= q_{\mathrm{w},1}
+    \label{eq:d_start}\\
+  \delta(q_{\mathrm{w},k},\; \mathtt{capture\_ok})
+    &= q_{\mathrm{w},k+1},
+    \quad 1 \le k < N
+    \label{eq:d_ok}\\
+  \delta(q_{\mathrm{w},N},\; \mathtt{capture\_ok})
+    &= q_{\mathrm{ready}}
+    \label{eq:d_final}\\
+  \delta(q_{\mathrm{w},k},\; \mathtt{capture\_fail})
+    &= q_{\mathrm{w},k},
+    \quad 1 \le k \le N
+    \label{eq:d_fail}\\
+  \delta(q_{\mathrm{ready}},\; \mathtt{finalize})
+    &= q_{\mathrm{idle}}
+    \label{eq:d_finalize}\\
+  \delta(q,\; \mathtt{abort})
+    &= q_{\mathrm{idle}},
+    \quad \forall\, q \in Q \setminus \{q_{\mathrm{idle}}\}
+    \label{eq:d_abort}
+\end{align}
+
+Any $(q, \sigma)$ pair not listed above leaves the state unchanged; the API call returns \texttt{-EINVAL}, with the exception that $\delta(q_{\mathrm{idle}},\,\mathtt{abort})$ returns \texttt{-EALREADY}, distinguishing the ``already idle'' condition from a malformed call. Initial state $q_0 = q_{\mathrm{idle}}$; accepting state $F = \{q_{\mathrm{ready}}\}$. Figure~\ref{fig:fsm} illustrates $\mathcal{A}$ for $N = 2$.
+
+\begin{proposition}[No Partial Template Storage]
+\label{prop:safety}
+For any execution trace $\tau \in \Sigma^*$, a template is committed to persistent storage only after exactly $N$ $\mathtt{capture\_ok}$ events following the most recent $\mathtt{start}$ event.
+\end{proposition}
+
+\begin{proof}
+Template storage is triggered exclusively by \\ $\delta(q_{\mathrm{ready}},\,\mathtt{finalize}) = q_{\mathrm{idle}}$ (Eq.~\eqref{eq:d_finalize}), which is defined only when the current state is $q_{\mathrm{ready}}$. For all $q \neq q_{\mathrm{ready}}$, the pair $(q,\, \mathtt{finalize})$ is undefined; the API returns \texttt{-EINVAL} and the state is unchanged. By Eq.~\eqref{eq:d_final}, $q_{\mathrm{ready}}$ is the unique target of $\delta(q_{\mathrm{w},N},\,\mathtt{capture\_ok})$. By induction on $k$ using Eq.~\eqref{eq:d_ok}: state $q_{\mathrm{w},k}$ is reachable only after exactly $k$ $\mathtt{capture\_ok}$ events since the last $\mathtt{start}$; $\mathtt{capture\_fail}$ self-loops (Eq.~\eqref{eq:d_fail}) do not advance $k$. Therefore $q_{\mathrm{ready}}$ requires exactly $N$ $\mathtt{capture\_ok}$ events. This is enforced in each reference driver by:
+\begin{verbatim}
+  if (data->enroll_state != ENROLL_READY)
+      return -EINVAL;
+\end{verbatim}
+\end{proof}
 
 \begin{figure}
     \centering
@@ -141,6 +244,17 @@ The driver contract uses three compliance tiers enforced by the API structure it
 \subsection{Real-Time and Resource Analysis}
 
 All host-side operations maintain $O(1)$ time and space complexity; 1:N identification complexity resides within the sensor hardware. The schedulability impact of BASE's yielding I/O model is evaluated empirically in Section~\ref{sec:eval_concurrency}.
+
+The host-side enrollment workflow executes a fixed sequence of $N$ API calls regardless of database size; $N$ is bounded by \texttt{max\_templates}. Match and delete perform a fixed number of UART transactions per operation. Thus all host-side operations are $O(1)$ in time and space with respect to enrolled template count.
+
+Under Rate Monotonic Scheduling with $\tau_1$ ($T_1=10\,\text{ms}$, $C_1 \leq 50\,\mu\text{s}$, conservative upper bound on the loop body executing \texttt{k\_uptime\_ticks()} plus deadline comparison) and $\tau_2$ ($T_2=500\,\text{ms}$, one sensor capture period; $C_2=0.05\,\text{ms}$, derived from the $100\,\mu\text{s}$ measured scheduling overhead under BASE), CPU utilization is:
+\begin{equation}
+  U = \frac{C_1}{T_1} + \frac{C_2}{T_2}
+    = \frac{0.05}{10} + \frac{0.05}{500}
+    = 0.005 + 0.0001 \approx 0.005
+\end{equation}
+
+The Liu--Layland bound for $n=2$ tasks is $U \leq 2(2^{1/2}-1) \approx 0.83$. Since $0.005 \ll 0.83$, schedulability is guaranteed with a ${\sim}160\times$ margin, confirming the empirical results in Section~\ref{sec:eval_concurrency}.
 
 \subsection{Security and Threat Model}
 \label{sec:threat_model}
